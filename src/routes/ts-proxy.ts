@@ -1,8 +1,19 @@
 import { setResponseHeaders } from 'h3';
+import { getCachedSegment } from './m3u8-proxy';
+
+// Check if caching is disabled via environment variable
+const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
 
 export default defineEventHandler(async (event) => {
   // Handle CORS preflight requests
   if (isPreflightRequest(event)) return handleCors(event, {});
+
+  if (process.env.DISABLE_M3U8 === 'true') {
+    return sendError(event, createError({
+      statusCode: 404,
+      statusMessage: 'TS proxying is disabled'
+    }));
+  }
   
   const url = getQuery(event).url as string;
   const headersParam = getQuery(event).headers as string;
@@ -25,6 +36,23 @@ export default defineEventHandler(async (event) => {
   }
   
   try {
+    // Only check cache if caching is enabled
+    if (!isCacheDisabled()) {
+      const cachedSegment = getCachedSegment(url);
+      
+      if (cachedSegment) {
+        setResponseHeaders(event, {
+          'Content-Type': cachedSegment.headers['content-type'] || 'video/mp2t',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Allow-Methods': '*',
+          'Cache-Control': 'public, max-age=3600' // Allow caching of TS segments
+        });
+        
+        return cachedSegment.data;
+      }
+    }
+    
     const response = await globalThis.fetch(url, {
       method: 'GET',
       headers: {
@@ -38,13 +66,12 @@ export default defineEventHandler(async (event) => {
       throw new Error(`Failed to fetch TS file: ${response.status} ${response.statusText}`);
     }
     
-    // Set appropriate headers for each video segment
     setResponseHeaders(event, {
       'Content-Type': 'video/mp2t',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': '*',
       'Access-Control-Allow-Methods': '*',
-      'Cache-Control': 'public, max-age=3600'  // Allow caching of TS segments
+      'Cache-Control': 'public, max-age=3600' // Allow caching of TS segments
     });
     
     // Return the binary data directly
@@ -56,4 +83,4 @@ export default defineEventHandler(async (event) => {
       statusMessage: error.message || 'Error proxying TS file'
     }));
   }
-}); 
+});
