@@ -14,7 +14,7 @@ function parseURL(req_url: string, baseUrl?: string) {
     return null;
   }
   
-  if (!match) {
+  if (!match[1]) {
     if (/^https?:/i.test(req_url)) {
       return null;
     }
@@ -24,7 +24,7 @@ function parseURL(req_url: string, baseUrl?: string) {
       // "//" is omitted
       req_url = "//" + req_url;
     }
-    req_url = (match === "443" ? "https:" : "http:") + req_url;
+    req_url = (match[4] === "443" ? "https:" : "http:") + req_url;
   }
   
   try {
@@ -62,7 +62,7 @@ function cleanupCache() {
   
   if (segmentCache.size > CACHE_MAX_SIZE) {
     const entries = Array.from(segmentCache.entries())
-      .sort((a, b) => a.timestamp - b.timestamp);
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
     
     const toRemove = entries.slice(0, segmentCache.size - CACHE_MAX_SIZE);
     for (const [url] of toRemove) {
@@ -226,35 +226,21 @@ async function proxyM3U8(event: any) {
         if (line.startsWith("#")) {
           if (line.startsWith("#EXT-X-KEY:")) {
             // Proxy the key URL
-            const uriRegex = /URI="([^"]+)"/;
-            const match = line.match(uriRegex);
-            if (match && match) {
-              const keyUrl = parseURL(match, url);
-              if (keyUrl) {
-                const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(
-                  keyUrl,
-                )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-                newLines.push(line.replace(match, proxyKeyUrl));
-              } else {
-                newLines.push(line);
-              }
+            const regex = /https?:\/\/[^\""\s]+/g;
+            const keyUrl = regex.exec(line)?.[0];
+            if (keyUrl) {
+              const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(keyUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+              newLines.push(line.replace(keyUrl, proxyKeyUrl));
             } else {
               newLines.push(line);
             }
           } else if (line.startsWith("#EXT-X-MEDIA:")) {
             // Proxy alternative media URLs (like audio streams)
-            const uriRegex = /URI="([^"]+)"/;
-            const match = line.match(uriRegex);
-            if (match && match) {
-              const mediaUrl = parseURL(match, url);
-              if (mediaUrl) {
-                const proxyMediaUrl = `${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(
-                  mediaUrl,
-                )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-                newLines.push(line.replace(match, proxyMediaUrl));
-              } else {
-                newLines.push(line);
-              }
+            const regex = /https?:\/\/[^\""\s]+/g;
+            const mediaUrl = regex.exec(line)?.[0];
+            if (mediaUrl) {
+              const proxyMediaUrl = `${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(mediaUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+              newLines.push(line.replace(mediaUrl, proxyMediaUrl));
             } else {
               newLines.push(line);
             }
@@ -296,22 +282,15 @@ async function proxyM3U8(event: any) {
         if (line.startsWith("#")) {
           if (line.startsWith("#EXT-X-KEY:")) {
             // Proxy the key URL
-            const uriRegex = /URI="([^"]+)"/;
-            const match = line.match(uriRegex);
-            if (match && match) {
-              const keyUrl = parseURL(match, url);
-              if (keyUrl) {
-                const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(
-                  keyUrl,
-                )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-                newLines.push(line.replace(match, proxyKeyUrl));
-
-                // Only prefetch if cache is enabled
-                if (!isCacheDisabled()) {
-                  prefetchSegment(keyUrl, headers as HeadersInit);
-                }
-              } else {
-                newLines.push(line);
+            const regex = /https?:\/\/[^\""\s]+/g;
+            const keyUrl = regex.exec(line)?.[0];
+            if (keyUrl) {
+              const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(keyUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+              newLines.push(line.replace(keyUrl, proxyKeyUrl));
+              
+              // Only prefetch if cache is enabled
+              if (!isCacheDisabled()) {
+                prefetchSegment(keyUrl, headers as HeadersInit);
               }
             } else {
               newLines.push(line);
