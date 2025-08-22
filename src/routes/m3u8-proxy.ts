@@ -1,4 +1,4 @@
-import { setResponseHeaders } from 'h3';
+import { setResponseHeaders, getQuery, getRequestHost, getRequestProtocol, sendError, createError, defineEventHandler, isPreflightRequest, handleCors } from 'h3';
 
 // Check if caching is disabled via environment variable
 const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
@@ -172,19 +172,58 @@ export function getCacheStats() {
 }
 
 /**
+ * Extracts URL from M3U8 tag attributes (handles both absolute and relative URLs)
+ */
+function extractUrlFromTag(line: string, baseUrl: string): string | null {
+  // Match URI="..." pattern
+  const uriMatch = line.match(/URI="([^"]+)"/);
+  if (uriMatch) {
+    const uri = uriMatch[1];
+    // If it's already an absolute URL, return it
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      return uri;
+    }
+    // Otherwise, it's a relative URL - combine with base URL
+    try {
+      return new URL(uri, baseUrl).href;
+    } catch (e) {
+      console.error(`Failed to resolve relative URL ${uri} with base ${baseUrl}:`, e);
+      return null;
+    }
+  }
+
+  // For segment URLs that are just the URL without URI="..."
+  if (!line.startsWith('#')) {
+    // If it's already an absolute URL, return it
+    if (line.startsWith('http://') || line.startsWith('https://')) {
+      return line;
+    }
+    // Otherwise, it's a relative URL - combine with base URL
+    try {
+      return new URL(line, baseUrl).href;
+    } catch (e) {
+      console.error(`Failed to resolve relative segment URL ${line} with base ${baseUrl}:`, e);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Proxies m3u8 files and replaces the content to point to the proxy
  */
 async function proxyM3U8(event: any) {
   const url = getQuery(event).url as string;
   const headersParam = getQuery(event).headers as string;
-  
+
   if (!url) {
     return sendError(event, createError({
       statusCode: 400,
       statusMessage: 'URL parameter is required'
     }));
   }
-  
+
   let headers = {};
   try {
     headers = headersParam ? JSON.parse(headersParam) : {};
@@ -225,22 +264,26 @@ async function proxyM3U8(event: any) {
       for (const line of lines) {
         if (line.startsWith("#")) {
           if (line.startsWith("#EXT-X-KEY:")) {
-            // Proxy the key URL
-            const regex = /https?:\/\/[^\""\s]+/g;
-            const keyUrl = regex.exec(line)?.[0];
+            // Proxy the key URL (handles both absolute and relative URLs)
+            const keyUrl = extractUrlFromTag(line, url);
             if (keyUrl) {
               const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(keyUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-              newLines.push(line.replace(keyUrl, proxyKeyUrl));
+              // Replace the entire URI="..." part or just the URL if it's not quoted
+              if (line.includes('URI="')) {
+                newLines.push(line.replace(`URI="${keyUrl.split('?')[0]}"`, `URI="${proxyKeyUrl}"`));
+              } else {
+                newLines.push(line.replace(keyUrl, proxyKeyUrl));
+              }
             } else {
               newLines.push(line);
             }
           } else if (line.startsWith("#EXT-X-MEDIA:")) {
             // Proxy alternative media URLs (like audio streams)
-            const regex = /https?:\/\/[^\""\s]+/g;
-            const mediaUrl = regex.exec(line)?.[0];
+            const mediaUrl = extractUrlFromTag(line, url);
             if (mediaUrl) {
               const proxyMediaUrl = `${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(mediaUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-              newLines.push(line.replace(mediaUrl, proxyMediaUrl));
+              // Replace the entire URI="..." part
+              newLines.push(line.replace(`URI="${mediaUrl.split('?')[0]}"`, `URI="${proxyMediaUrl}"`));
             } else {
               newLines.push(line);
             }
@@ -248,8 +291,8 @@ async function proxyM3U8(event: any) {
             newLines.push(line);
           }
         } else if (line.trim()) {
-          // This is a quality variant URL
-          const variantUrl = parseURL(line, url);
+          // This is a quality variant URL (handles both absolute and relative URLs)
+          const variantUrl = extractUrlFromTag(line, url) || parseURL(line, url);
           if (variantUrl) {
             newLines.push(`${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(variantUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`);
           } else {
@@ -281,13 +324,17 @@ async function proxyM3U8(event: any) {
       for (const line of lines) {
         if (line.startsWith("#")) {
           if (line.startsWith("#EXT-X-KEY:")) {
-            // Proxy the key URL
-            const regex = /https?:\/\/[^\""\s]+/g;
-            const keyUrl = regex.exec(line)?.[0];
+            // Proxy the key URL (handles both absolute and relative URLs)
+            const keyUrl = extractUrlFromTag(line, url);
             if (keyUrl) {
               const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(keyUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-              newLines.push(line.replace(keyUrl, proxyKeyUrl));
-              
+              // Replace the entire URI="..." part or just the URL if it's not quoted
+              if (line.includes('URI="')) {
+                newLines.push(line.replace(`URI="${keyUrl.split('?')[0]}"`, `URI="${proxyKeyUrl}"`));
+              } else {
+                newLines.push(line.replace(keyUrl, proxyKeyUrl));
+              }
+
               // Only prefetch if cache is enabled
               if (!isCacheDisabled()) {
                 prefetchSegment(keyUrl, headers as HeadersInit);
@@ -299,11 +346,11 @@ async function proxyM3U8(event: any) {
             newLines.push(line);
           }
         } else if (line.trim() && !line.startsWith("#")) {
-          // This is a segment URL (.ts file)
-          const segmentUrl = parseURL(line, url);
+          // This is a segment URL (.ts file) - handles both absolute and relative URLs
+          const segmentUrl = extractUrlFromTag(line, url) || parseURL(line, url);
           if (segmentUrl) {
             segmentUrls.push(segmentUrl);
-            
+
             newLines.push(`${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(segmentUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`);
           } else {
             newLines.push(line);
