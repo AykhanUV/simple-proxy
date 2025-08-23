@@ -9,7 +9,6 @@ function parseURL(req_url: string, baseUrl?: string) {
       return new URL(req_url, baseUrl).href;
     } catch (e) {
       // Ignore invalid URLs
-      return null;
     }
   }
   
