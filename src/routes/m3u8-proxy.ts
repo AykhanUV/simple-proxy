@@ -5,7 +5,11 @@ const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
 
 function parseURL(req_url: string, baseUrl?: string) {
   if (baseUrl) {
-    return new URL(req_url, baseUrl).href;
+    try {
+      return new URL(req_url, baseUrl).href;
+    } catch (e) {
+      // Ignore invalid URLs
+    }
   }
   
   const match = req_url.match(/^(?:(https?:)?\/\/)?(([^\/?]+?)(?::(\d{0,5})(?=[\/?]|$))?)([\/?][\S\s]*|$)/i);
