@@ -1,4 +1,4 @@
-import { setResponseHeaders } from 'h3';
+import { setResponseHeaders, getRequestHeader } from 'h3';
 
 // Check if caching is disabled via environment variable
 const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
@@ -214,7 +214,7 @@ async function proxyM3U8(event: any) {
     
     // Get the base URL for the host
     const host = getRequestHost(event);
-    const proto = getRequestProtocol(event);
+    const proto = getRequestHeader(event, 'x-forwarded-proto') || getRequestProtocol(event);
     const baseProxyUrl = `${proto}://${host}`;
     
     if (m3u8Content.includes("RESOLUTION=")) {
