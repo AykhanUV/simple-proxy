@@ -1,10 +1,19 @@
 import { setResponseHeaders } from 'h3';
+import {
+  H3Event,
+  getQuery,
+  sendError,
+  createError,
+  defineEventHandler,
+  isPreflightRequest,
+  handleCors,
+} from 'h3';
 import { getCachedSegment } from './m3u8-proxy';
 
 // Check if caching is disabled via environment variable
 const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event: H3Event) => {
   // Handle CORS preflight requests
   if (isPreflightRequest(event)) return handleCors(event, {});
 
@@ -66,12 +75,13 @@ export default defineEventHandler(async (event) => {
       throw new Error(`Failed to fetch TS file: ${response.status} ${response.statusText}`);
     }
     
+    const contentType = response.headers.get('Content-Type') || 'video/mp2t';
     setResponseHeaders(event, {
-      'Content-Type': 'video/mp2t',
+      'Content-Type': contentType,
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': '*',
       'Access-Control-Allow-Methods': '*',
-      'Cache-Control': 'public, max-age=3600' // Allow caching of TS segments
+      'Cache-Control': 'public, max-age=3600', // Allow caching of TS segments
     });
     
     // Return the binary data directly
