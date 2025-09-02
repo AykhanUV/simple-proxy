@@ -1,4 +1,5 @@
-import { defineEventHandler, getQuery } from 'h3';
+import { defineEventHandler, getQuery, readRawBody } from 'h3';
+import { getProxyRequestHeaders } from 'h3';
 
 export default defineEventHandler(async (event) => {
   const { destination } = getQuery(event);
@@ -7,10 +8,13 @@ export default defineEventHandler(async (event) => {
     return new Response('Missing destination parameter', { status: 400 });
   }
 
+  const body = await readRawBody(event).catch(() => undefined);
+
   const response = await fetch(destination, {
-    headers: event.req.headers,
-    method: event.req.method,
-    body: event.req.method !== 'GET' && event.req.method !== 'HEAD' ? event.req : undefined,
+    headers: getProxyRequestHeaders(event),
+    method: event.method,
+    body,
+    redirect: 'follow',
   });
 
   return new Response(response.body, {
