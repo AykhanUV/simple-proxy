@@ -228,155 +228,94 @@ async function proxyM3U8(event: H3Event) {
     const proto = getRequestProtocol(event);
     const baseProxyUrl = `${proto}://${host}`;
     
-    if (m3u8Content.includes("RESOLUTION=")) {
-      // This is a master playlist with multiple quality variants
-      const lines = m3u8Content.split("\n");
-      const newLines: string[] = [];
-      
-      for (const line of lines) {
-        if (line.startsWith("#")) {
-          if (line.startsWith("#EXT-X-KEY:")) {
-            // Proxy the key URL
-            const uriRegex = /URI="([^"]+)"/;
-            const keyUriMatch = line.match(uriRegex);
-            if (keyUriMatch && keyUriMatch[1]) {
-              const keyUri = keyUriMatch[1];
-              const absoluteKeyUrl = parseURL(keyUri, url);
-              if (absoluteKeyUrl) {
-                const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(
-                  absoluteKeyUrl,
-                )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-                newLines.push(line.replace(keyUri, proxyKeyUrl));
-              } else {
-                newLines.push(line);
-              }
-            } else {
-              newLines.push(line);
-            }
-          } else if (line.startsWith("#EXT-X-MEDIA:")) {
-            // Proxy alternative media URLs (like audio streams)
-            const uriRegex = /URI="([^"]+)"/;
-            const mediaUriMatch = line.match(uriRegex);
-            if (mediaUriMatch && mediaUriMatch[1]) {
-              const mediaUri = mediaUriMatch[1];
-              const absoluteMediaUrl = parseURL(mediaUri, url);
-              if (absoluteMediaUrl) {
-                const proxyMediaUrl = `${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(
-                  absoluteMediaUrl,
-                )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-                newLines.push(line.replace(mediaUri, proxyMediaUrl));
-              } else {
-                newLines.push(line);
-              }
-            } else {
-              newLines.push(line);
-            }
-          } else {
-            newLines.push(line);
-          }
-        } else if (line.trim()) {
-          // This is a quality variant URL
-          const variantUrl = parseURL(line, url);
-          if (variantUrl) {
-            newLines.push(`${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(variantUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`);
-          } else {
-            newLines.push(line);
-          }
-        } else {
-          // Empty line, preserve it
-          newLines.push(line);
-        }
-      }
-      
-      // Set appropriate headers
-      setResponseHeaders(event, {
-        'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
-        'Access-Control-Allow-Methods': '*',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      });
-      
-      return newLines.join("\n");
-    } else {
-      // This is a media playlist with segments
-      const lines = m3u8Content.split("\n");
-      const newLines: string[] = [];
-      
-      const segmentUrls: string[] = [];
-      
-      for (const line of lines) {
-        if (line.startsWith("#")) {
-          if (line.startsWith("#EXT-X-KEY:")) {
-            // Proxy the key URL
-            const uriRegex = /URI="([^"]+)"/;
-            const keyUriMatch = line.match(uriRegex);
-            if (keyUriMatch && keyUriMatch[1]) {
-              const keyUri = keyUriMatch[1];
-              const absoluteKeyUrl = parseURL(keyUri, url);
-              if (absoluteKeyUrl) {
-                const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(
-                  absoluteKeyUrl,
-                )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-                newLines.push(line.replace(keyUri, proxyKeyUrl));
+    const lines = m3u8Content.split('\n');
+    const newLines: string[] = [];
+    const segmentUrls: string[] = [];
 
-                // Only prefetch if cache is enabled
-                if (!isCacheDisabled()) {
-                  prefetchSegment(absoluteKeyUrl, headers as HeadersInit);
-                }
-              } else {
-                newLines.push(line);
-              }
-            } else {
-              newLines.push(line);
+    for (const line of lines) {
+      if (line.startsWith('#EXT-X-KEY')) {
+        const uriRegex = /URI="([^"]+)"/;
+        const keyUriMatch = line.match(uriRegex);
+        if (keyUriMatch?.[1]) {
+          const keyUri = keyUriMatch[1];
+          const absoluteKeyUrl = parseURL(keyUri, url);
+          if (absoluteKeyUrl) {
+            const proxyKeyUrl = `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(
+              absoluteKeyUrl,
+            )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+            newLines.push(line.replace(keyUri, proxyKeyUrl));
+            if (!isCacheDisabled()) {
+              prefetchSegment(absoluteKeyUrl, headers as HeadersInit);
             }
           } else {
             newLines.push(line);
           }
-        } else if (line.trim() && !line.startsWith("#")) {
-          // This is a segment URL (.ts file)
-          const segmentUrl = parseURL(line, url);
-          if (segmentUrl) {
-            segmentUrls.push(segmentUrl);
-            
-            newLines.push(`${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(segmentUrl)}&headers=${encodeURIComponent(JSON.stringify(headers))}`);
+        } else {
+          newLines.push(line);
+        }
+      } else if (line.startsWith('#EXT-X-MEDIA')) {
+        const uriRegex = /URI="([^"]+)"/;
+        const mediaUriMatch = line.match(uriRegex);
+        if (mediaUriMatch?.[1]) {
+          const mediaUri = mediaUriMatch[1];
+          const absoluteMediaUrl = parseURL(mediaUri, url);
+          if (absoluteMediaUrl) {
+            const proxyMediaUrl = `${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(
+              absoluteMediaUrl,
+            )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+            newLines.push(line.replace(mediaUri, proxyMediaUrl));
           } else {
             newLines.push(line);
           }
         } else {
-          // Comment or empty line, preserve it
           newLines.push(line);
         }
-      }
-      
-      if (segmentUrls.length > 0) {
-        console.log(`Starting to prefetch ${segmentUrls.length} segments for ${url}`);
-        
-        // Only perform cache operations if cache is enabled
-        if (!isCacheDisabled()) {
-          cleanupCache();
-          
-          Promise.all(segmentUrls.map(segmentUrl => 
-            prefetchSegment(segmentUrl, headers as HeadersInit)
-          )).catch(error => {
-            console.error('Error prefetching segments:', error);
-          });
+      } else if (line.trim() && !line.startsWith('#')) {
+        const isSegment = line.toLowerCase().includes('.ts');
+        const resolvedUrl = parseURL(line, url);
+        if (resolvedUrl) {
+          const proxyUrl = isSegment
+            ? `${baseProxyUrl}/ts-proxy?url=${encodeURIComponent(
+                resolvedUrl,
+              )}&headers=${encodeURIComponent(JSON.stringify(headers))}`
+            : `${baseProxyUrl}/m3u8-proxy?url=${encodeURIComponent(
+                resolvedUrl,
+              )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+          newLines.push(proxyUrl);
+          if (isSegment) {
+            segmentUrls.push(resolvedUrl);
+          }
         } else {
-          console.log('Cache disabled - skipping prefetch operations');
+          newLines.push(line);
         }
+      } else {
+        newLines.push(line);
       }
-      
-      // Set appropriate headers
-      setResponseHeaders(event, {
-        'Content-Type': 'application/vnd.apple.mpegurl',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
-        'Access-Control-Allow-Methods': '*',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      });
-      
-      return newLines.join("\n");
     }
+
+    if (segmentUrls.length > 0 && !isCacheDisabled()) {
+      console.log(
+        `Starting to prefetch ${segmentUrls.length} segments for ${url}`,
+      );
+      cleanupCache();
+      Promise.all(
+        segmentUrls.map((segmentUrl) =>
+          prefetchSegment(segmentUrl, headers as HeadersInit),
+        ),
+      ).catch((error) => {
+        console.error('Error prefetching segments:', error);
+      });
+    }
+
+    setResponseHeaders(event, {
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Methods': '*',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    });
+
+    return newLines.join('\n');
   } catch (error: any) {
     console.error('Error proxying M3U8:', error);
     return sendError(event, createError({
@@ -395,7 +334,7 @@ export function handleCacheStats(event: H3Event) {
   return getCacheStats();
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event: H3Event) => {
   // Handle CORS preflight requests
   if (isPreflightRequest(event)) return handleCors(event, {});
 
