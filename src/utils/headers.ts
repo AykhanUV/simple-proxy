@@ -6,7 +6,6 @@ const headerMap: Record<string, string> = {
   'X-X-Real-Ip': 'X-Real-Ip',
 };
 
-// Precompute blacklisted headers as a Set for O(1) lookups
 const blacklistedHeaders = [
   'cf-connecting-ip',
   'cf-worker',
@@ -25,37 +24,28 @@ const blacklistedHeaders = [
   ...Object.keys(headerMap),
 ];
 
-// Create a Set for case-insensitive lookups
-const BLACKLISTED_HEADERS_SET = new Set(
-  blacklistedHeaders.map(h => h.toLowerCase())
-);
-
-// Cache the default user agent to avoid recreating the string
-const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:93.0) Gecko/20100101 Firefox/93.0';
-
 function copyHeader(
   headers: Headers,
   outputHeaders: Headers,
   inputKey: string,
   outputKey: string,
 ) {
-  // Optimized to use a single operation instead of has() + get()
-  const value = headers.get(inputKey);
-  if (value !== null) {
-    outputHeaders.set(outputKey, value);
-  }
+  if (headers.has(inputKey))
+    outputHeaders.set(outputKey, headers.get(inputKey) ?? '');
 }
 
 export function getProxyHeaders(headers: Headers): Headers {
   const output = new Headers();
 
-  // Use cached user agent string
-  output.set('User-Agent', DEFAULT_USER_AGENT);
+  // default user agent
+  output.set(
+    'User-Agent',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:93.0) Gecko/20100101 Firefox/93.0',
+  );
 
-  // Use for...of loop instead of forEach for better performance
-  for (const [inputKey, outputKey] of Object.entries(headerMap)) {
-    copyHeader(headers, output, inputKey, outputKey);
-  }
+  Object.entries(headerMap).forEach((entry) => {
+    copyHeader(headers, output, entry[0], entry[1]);
+  });
 
   return output;
 }
@@ -80,18 +70,4 @@ export function getAfterResponseHeaders(
 
 export function getBlacklistedHeaders() {
   return blacklistedHeaders;
-}
-
-// Optimized function to filter headers using the precomputed Set
-export function filterHeaders(headers: Headers): Headers {
-  const filtered = new Headers();
-  
-  // Use for...of loop instead of entries() for better performance
-  for (const [key, value] of headers) {
-    if (!BLACKLISTED_HEADERS_SET.has(key.toLowerCase())) {
-      filtered.set(key, value);
-    }
-  }
-  
-  return filtered;
 }

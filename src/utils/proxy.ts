@@ -4,11 +4,7 @@ import {
   ProxyOptions,
   getProxyRequestHeaders,
   RequestHeaders,
-  getRequestWebStream,
-  readRawBody,
-  sendProxy,
 } from 'h3';
-import { filterHeaders } from './headers';
 
 const PayloadMethods = new Set(['PATCH', 'POST', 'PUT', 'DELETE']);
 
@@ -60,7 +56,7 @@ export async function specificProxyRequest(
   }
 
   const method = opts.fetchOptions?.method || event.method;
-  let oldHeaders = getProxyRequestHeaders(event);
+  const oldHeaders = getProxyRequestHeaders(event);
 
   // netlify seems to be changing the content-encoding header to gzip when the reponse is encoded in zstd
   // so as temp fix just not sending zstd in accept encoding
@@ -71,26 +67,12 @@ export async function specificProxyRequest(
       .filter((x: string) => x !== 'zstd')
       .join(', ');
 
-  // Use optimized header filtering if blacklistedHeaders are provided
-  if (opts.blacklistedHeaders && opts.blacklistedHeaders.length > 0) {
-    const headersObj = new Headers();
-    // Convert oldHeaders object to Headers
-    for (const [key, value] of Object.entries(oldHeaders)) {
-      headersObj.set(key, value as string);
-    }
-    
-    // Filter headers using our optimized function
-    const filteredHeaders = filterHeaders(headersObj);
-    
-    // Convert back to object
-    const filteredObj: Record<string, string> = {};
-    for (const [key, value] of filteredHeaders.entries()) {
-      filteredObj[key] = value;
-    }
-    
-    // Replace oldHeaders with filtered version
-    oldHeaders = filteredObj;
-  }
+  opts.blacklistedHeaders?.forEach((header) => {
+    const keys = Object.keys(oldHeaders).filter(
+      (v) => v.toLowerCase() === header.toLowerCase(),
+    );
+    keys.forEach((k) => delete oldHeaders[k]);
+  });
 
   const fetchHeaders = mergeHeaders(
     oldHeaders,
@@ -111,7 +93,7 @@ export async function specificProxyRequest(
     ...opts,
     fetchOptions: {
       method,
-      body: body as BodyInit,
+      body,
       duplex,
       ...opts.fetchOptions,
       headers: fetchHeaders,

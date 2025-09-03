@@ -1,6 +1,5 @@
-import { setResponseHeaders, sendStream, defineEventHandler, isPreflightRequest, handleCors, sendError, createError, getQuery } from 'h3';
+import { setResponseHeaders } from 'h3';
 import { getCachedSegment } from './m3u8-proxy';
-import { pooledRequest } from '@/utils/connection-pool';
 
 // Check if caching is disabled via environment variable
 const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
@@ -50,19 +49,11 @@ export default defineEventHandler(async (event) => {
           'Cache-Control': 'public, max-age=3600' // Allow caching of TS segments
         });
         
-        // Convert cached data to a stream for consistent handling
-        const readable = new ReadableStream({
-          start(controller) {
-            controller.enqueue(cachedSegment.data);
-            controller.close();
-          }
-        });
-        
-        return sendStream(event, readable);
+        return cachedSegment.data;
       }
     }
     
-    const response = await pooledRequest(url, {
+    const response = await globalThis.fetch(url, {
       method: 'GET',
       headers: {
         // Default User-Agent (from src/utils/headers.ts)
@@ -83,8 +74,8 @@ export default defineEventHandler(async (event) => {
       'Cache-Control': 'public, max-age=3600' // Allow caching of TS segments
     });
     
-    // Stream the response directly instead of buffering
-    return sendStream(event, response.body as ReadableStream);
+    // Return the binary data directly
+    return new Uint8Array(await response.arrayBuffer());
   } catch (error: any) {
     console.error('Error proxying TS file:', error);
     return sendError(event, createError({

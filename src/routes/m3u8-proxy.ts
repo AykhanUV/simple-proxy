@@ -1,7 +1,4 @@
-import { setResponseHeaders, getQuery, sendError, createError, getRequestHost, getRequestProtocol, defineEventHandler, isPreflightRequest, handleCors } from 'h3';
-import { prefetchLimiter } from '@/utils/concurrency';
-import { LRUCache } from '@/utils/lru-cache';
-import { pooledRequest } from '@/utils/connection-pool';
+import { setResponseHeaders } from 'h3';
 
 // Check if caching is disabled via environment variable
 const isCacheDisabled = () => process.env.DISABLE_CACHE === 'true';
@@ -42,16 +39,41 @@ function parseURL(req_url: string, baseUrl?: string) {
   }
 }
 
+interface CacheEntry {
+  data: Uint8Array;
+  headers: Record<string, string>;
+  timestamp: number;
+}
+
 const CACHE_MAX_SIZE = 2000;
-const CACHE_MAX_MEMORY_BYTES = 500 * 1024 * 1024; // 500MB memory limit
 const CACHE_EXPIRY_MS = 2 * 60 * 60 * 1000;
-const segmentCache = new LRUCache<string, Uint8Array>(CACHE_MAX_SIZE, CACHE_MAX_MEMORY_BYTES, CACHE_EXPIRY_MS);
+const segmentCache: Map<string, CacheEntry> = new Map();
 
 function cleanupCache() {
-  const removedCount = segmentCache.cleanup();
+  const now = Date.now();
+  let expiredCount = 0;
   
-  if (removedCount > 0) {
-    console.log(`Cleaned up ${removedCount} expired cache entries. Current size: ${segmentCache.size}`);
+  for (const [url, entry] of segmentCache.entries()) {
+    if (now - entry.timestamp > CACHE_EXPIRY_MS) {
+      segmentCache.delete(url);
+      expiredCount++;
+    }
+  }
+  
+  if (segmentCache.size > CACHE_MAX_SIZE) {
+    const entries = Array.from(segmentCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    
+    const toRemove = entries.slice(0, segmentCache.size - CACHE_MAX_SIZE);
+    for (const [url] of toRemove) {
+      segmentCache.delete(url);
+    }
+    
+    console.log(`Cache size limit reached. Removed ${toRemove.length} oldest entries. Current size: ${segmentCache.size}`);
+  }
+  
+  if (expiredCount > 0) {
+    console.log(`Cleaned up ${expiredCount} expired cache entries. Current size: ${segmentCache.size}`);
   }
   
   return segmentCache.size;
@@ -73,13 +95,18 @@ async function prefetchSegment(url: string, headers: HeadersInit) {
     return;
   }
   
+  if (segmentCache.size >= CACHE_MAX_SIZE) {
+    cleanupCache();
+  }
+  
   const existing = segmentCache.get(url);
-  if (existing) {
-    return; // LRU cache handles expiration automatically
+  const now = Date.now();
+  if (existing && (now - existing.timestamp <= CACHE_EXPIRY_MS)) {
+    return;
   }
   
   try {
-    const response = await pooledRequest(url, {
+    const response = await globalThis.fetch(url, {
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:93.0) Gecko/20100101 Firefox/93.0',
@@ -99,7 +126,11 @@ async function prefetchSegment(url: string, headers: HeadersInit) {
       responseHeaders[key] = value;
     });
     
-    segmentCache.set(url, data, responseHeaders);
+    segmentCache.set(url, { 
+      data, 
+      headers: responseHeaders,
+      timestamp: Date.now()
+    });
     
     console.log(`Prefetched and cached segment: ${url}`);
   } catch (error) {
@@ -113,11 +144,31 @@ export function getCachedSegment(url: string) {
     return undefined;
   }
   
-  return segmentCache.get(url);
+  const entry = segmentCache.get(url);
+  if (entry) {
+    if (Date.now() - entry.timestamp > CACHE_EXPIRY_MS) {
+      segmentCache.delete(url);
+      return undefined;
+    }
+    return entry;
+  }
+  return undefined;
 }
 
 export function getCacheStats() {
-  return segmentCache.getStats();
+  const sizes = Array.from(segmentCache.values())
+    .map(entry => entry.data.byteLength);
+  
+  const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
+  const avgBytes = sizes.length > 0 ? totalBytes / sizes.length : 0;
+  
+  return {
+    entries: segmentCache.size,
+    totalSizeMB: (totalBytes / (1024 * 1024)).toFixed(2),
+    avgEntrySizeKB: (avgBytes / 1024).toFixed(2),
+    maxSize: CACHE_MAX_SIZE,
+    expiryHours: CACHE_EXPIRY_MS / (60 * 60 * 1000)
+  };
 }
 
 /**
@@ -145,7 +196,7 @@ async function proxyM3U8(event: any) {
   }
   
   try {
-    const response = await pooledRequest(url, {
+    const response = await globalThis.fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:93.0) Gecko/20100101 Firefox/93.0',
         ...(headers as HeadersInit),
@@ -270,9 +321,8 @@ async function proxyM3U8(event: any) {
         if (!isCacheDisabled()) {
           cleanupCache();
           
-          // Use concurrency limiter for prefetching
-          Promise.all(segmentUrls.map(segmentUrl =>
-            prefetchLimiter.schedule(() => prefetchSegment(segmentUrl, headers as HeadersInit))
+          Promise.all(segmentUrls.map(segmentUrl => 
+            prefetchSegment(segmentUrl, headers as HeadersInit)
           )).catch(error => {
             console.error('Error prefetching segments:', error);
           });
