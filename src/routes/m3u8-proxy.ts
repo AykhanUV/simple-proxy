@@ -1,5 +1,4 @@
 import { setResponseHeaders, getQuery, sendError, createError, getRequestHost, getRequestProtocol, defineEventHandler, isPreflightRequest, handleCors } from 'h3';
-import { prefetchLimiter } from '@/utils/concurrency';
 import { LRUCache } from '@/utils/lru-cache';
 import { pooledRequest } from '@/utils/connection-pool';
 
@@ -270,9 +269,9 @@ async function proxyM3U8(event: any) {
         if (!isCacheDisabled()) {
           cleanupCache();
           
-          // Use concurrency limiter for prefetching
+          // Prefetch all segments without concurrency limiting
           Promise.all(segmentUrls.map(segmentUrl =>
-            prefetchLimiter.schedule(() => prefetchSegment(segmentUrl, headers as HeadersInit))
+            prefetchSegment(segmentUrl, headers as HeadersInit)
           )).catch(error => {
             console.error('Error prefetching segments:', error);
           });
