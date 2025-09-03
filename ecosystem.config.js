@@ -7,6 +7,7 @@ module.exports = {
       exec_mode: 'cluster',
       env: {
         NODE_ENV: 'production',
+        DISABLE_CACHE: 'true',
       },
     },
   ],
